@@ -13,9 +13,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-memory_size: 512
-number_cpus: 1
-vm_box: "ubuntu/trusty64"
-#num_instances: 3
-instances_ip: ["10.212.10.100", "10.212.10.101", "10.212.10.102"]
-#jdk: "java-1.7.0-openjdk-devel.x86_64"
+#
+# instead of repeating these for each instance,
+#   use the "defaults" section instead, and override when needed
+#   in the instance section
+defaults:
+   memory_size: 512
+   number_cpus: 1
+   vm_box: "ubuntu/trusty64"
+#
+# Notice that instances do not have a __default__ ip_address,
+#   so you must specify at least ip_address: in the array of instances
+instances:
+  - ip_address: "10.212.10.100"
+    memory_size: 513
+  - ip_address: "10.212.10.101"
+  - ip_address: "10.212.10.102"
+    extra_disks:
+      - file_name: 'extradisk1'
+        size_in_mb:  '4096'
+        name: testname
+    synced_folders:
+      - src: test
+        dest: /tmp/test
+      - src: www
+        dest: /var/www/html
+        options:
+          :create: true
+          :owner:  root
+          :group:  root
+          :mount_options: ['dmode=0755', 'fmode=0644']

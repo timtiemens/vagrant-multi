@@ -23,100 +23,225 @@ CONFIG = _config
 
 # Override vagrant configurations using environment variables
 keys = CONFIG.keys
-keys.each do |k|
-  if ENV[k.upcase] != nil then
-    puts "Overide from environment variable: " + k.upcase + " = " + ENV[k.upcase]
-    if /^\d+/.match(ENV[k.upcase])
-      CONFIG[k] = Integer(ENV[k.upcase])
-    else
-      CONFIG[k] = ENV[k.upcase]
+keys.each do |outerk|
+  CONFIG[outerk].each do |inneritem|
+    innerk = inneritem[0]
+    key = "#{outerk}_#{innerk}"
+    val = ENV[key]
+    if val == nil then
+      key = key.upcase
+      val = ENV[key]
+    end
+    if val != nil then
+      puts "Overide from environment variable: " + key + " = " + val
+      if /^\d+/.match(val)
+        val = Integer(val)
+      end
+      CONFIG[outerk][innerk] = val
     end
   end
 end
 
+# i = 1 .. N      index = 0 .. N-1
+def getConfigValue(index, key)
+  config = CONFIG
+  retval = "ERROR for #{index} for #{key}"
+  if config.has_key?('defaults')
+    defaultReturn = config['defaults'][key]
+    retval = defaultReturn
+  else
+    puts "ERROR - missing 'defaults' section in configuration"
+  end
+  if config.has_key?('instances')
+    item = config['instances'][index]
+    if item.has_key?(key)
+      retval = item[key]
+    end
+  end
 
-# number of instances
-num_instances = CONFIG['instances_ip'].length
+#  puts "Return for instances[#{index}][#{key}] is #{retval}"
+  return retval
+end
 
 CLUSTER_PREFIX = "cluster"
 
-# TODO: for loop instances_ip, build up etc_hosts variable
-etc_hosts = "# added by Vagrantfile\n"
-(1..num_instances).each do |i|
-    if i > 1
-      nodename = "#{CLUSTER_PREFIX}-node%03d" % (i - 1)
-    else
-      nodename = "#{CLUSTER_PREFIX}-master"
-    end  
-  etc_hosts = "#{etc_hosts}\n#{CONFIG['instances_ip'][i - 1]}  #{nodename}"
+# i = 1 .. N      index = 0 .. N-1
+def getHostName(i)
+  # if you have more than 99 nodes, then this is not the tool for you:
+  if i > 1
+    nodename = "#{CLUSTER_PREFIX}-node%02d" % (i - 1)
+  else
+    nodename = "#{CLUSTER_PREFIX}-master"
+  end
+#  puts "Return for getHostName(#{i}) is #{nodename}"
+  return nodename
 end
 
-# Vagrant writes this to /etc/hosts:
-# 127.0.1.1 cluster1.vagrant cluster1
+# i = 1 .. N      index = 0 .. N-1
+def getIpAddress(i)
+  return CONFIG['instances'][i - 1]['ip_address']
+end
+
+# i = 1 .. N      index = 0 .. N-1
+def getSyncFolders(index)
+  retval = getConfigValue(index, 'synced_folders')
+  if retval.nil? || retval =~ /ERROR/
+    retval = []
+  end
+  return retval
+end
+
+# i = 1 .. N      index = 0 .. N-1
+def getExtraDisks(index)
+  retval = getConfigValue(index, 'extra_disks')
+  if retval.nil? || retval =~ /ERROR/
+    retval = []
+  end
+  return retval
+end
+
+def getFileToDisk(disk)
+  filename = disk['file_name']
+  if filename
+    # Note: hard-coded .vmdk
+    if ! filename.end_with? ".vmdk"
+      filename = "#{filename}.vmdk"
+    end
+  
+    # TODO: absolute path? for now just leave it implied as "."
+    file_to_disk = filename
+  else
+    file_to_disk = nil
+  end
+  
+  return file_to_disk
+  
+end
+
+# number of instances
+num_instances = CONFIG['instances'].length
+
+
+#
+# build up the /etc/hosts content:
+# Note: Vagrant writes this to /etc/hosts:
+#        127.0.1.1 cluster1.vagrant cluster1
+# Note: Remove any "127.0.?.1 cluster1.vagrant" entries, because we want the IP-FQDN
+#   to be one of the instances[:ip_address:] items, you could use sed:
+#     sed -i "/127.0.0.1 #{CLUSTER_PREFIX}/d" /etc/hosts
+#     sed -i "/127.0.1.1 #{CLUSTER_PREFIX}/d" /etc/hosts
+# But currently, this is done because the entire /etc/hosts file is replaced:
+#
+etc_hosts_fixed = <<SCRIPT
+# fixed, by Vagrantfile
+127.0.0.1 localhost
+
+# The following lines are desirable for IPv6 capable hosts
+::1 ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+ff02::3 ip6-allhosts
+
+# dynamic, by Vagrantfile
+SCRIPT
+
+etc_hosts_dynamic = ""
+(1..num_instances).each do |i|
+   nodename = getHostName(i)   
+   ipaddress = getIpAddress(i)
+  etc_hosts_dynamic = "#{etc_hosts_dynamic}\n#{ipaddress}  #{nodename}"
+end
 
 $script = <<SCRIPT
-# Remove any "127.0.?.1 cluster1.vagrant" entries, because we want the IP-FQDN
-#   to be one of the instance-ip[] items
-sed -i "/127.0.0.1 #{CLUSTER_PREFIX}/d" /etc/hosts
-sed -i "/127.0.1.1 #{CLUSTER_PREFIX}/d" /etc/hosts
 # our contents
-cat >> /etc/hosts <<EOF
-#{etc_hosts}
+cat > /etc/hosts <<EOF
+#{etc_hosts_fixed}
+#{etc_hosts_dynamic}
 EOF
 SCRIPT
+
+
+
 
 VAGRANTFILE_API_VERSION = "2"
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  # manage /etc/hosts by hostmanager plugin(https://github.com/smdahlen/vagrant-hostmanager)
-  # use vagrant-cachier to cache packages at local(https://github.com/fgrehm/vagrant-cachier)
-#  config.hostmanager.enabled = true
-
-  # use vagrant-cachier to cache packages at local(https://github.com/fgrehm/vagrant-cachier)
-  if Vagrant.has_plugin?("vagrant-cachier")
-    config.cache.scope = :box
-  end
-
+  #
+  # Vagrant is totally messed up -
+  #  there is no accepted way to reliably "create the .vmdk if it does not exist" when
+  #    you are inside Vagrant.configure...
+  #  so - look at the "puts", and how many times it prints on a single "vagrant up"...
+  #
+  # NOTE: *** on 'vagrant destroy', extra disks are deleted ***
+  
   # nodes definition
   (1..num_instances).each do |i|
-    if i > 1
-      nodename = "#{CLUSTER_PREFIX}-node%03d" % (i - 1)
-    else
-      nodename = "#{CLUSTER_PREFIX}-master"
-    end
-    config.vm.define "#{nodename}" do |node|
+#    puts "defineloop, i is #{i}"
+    index = i - 1    
+    nodename = getHostName(i)
 
-      node.vm.box = CONFIG['vm_box']
-      node_hostname=nodename
-      #  was node_fqdn="#{CLUSTER_PREFIX}#{i}.vagrant"
-      node_fqdn="#{nodename}.vagrant"
-      node_ip="#{CONFIG['instances_ip'][i - 1]}"
+    
+    config.vm.define "#{nodename}" do |node|
+      memory_size = getConfigValue(index, 'memory_size')
+      number_cpus = getConfigValue(index, 'number_cpus')
+      node_ip     = getIpAddress(i)
+      
+      node.vm.box = getConfigValue(index, 'vm_box')
+      
+      node_hostname = nodename
+      node_fqdn = "#{nodename}.vagrant"
+
+      node.vm.hostname = node_fqdn
 
       node.vm.provider :virtualbox do |vb|
-        vb.customize ["modifyvm", :id, "--memory", CONFIG['memory_size']]
-	vb.customize ['modifyvm', :id, '--cpus', CONFIG['number_cpus']]
+        # memory and CPU:
+        vb.customize ["modifyvm", :id, "--memory", memory_size]
+	vb.customize ['modifyvm', :id, '--cpus', number_cpus]
+
+        # extra disks:
+        disks = getExtraDisks(index)
+        disks.each do |disk|
+          # How many times do you think this prints "i is 3"??
+          #   If you said "two or three or four", then you are correct.
+          #   If you said "two" or "three" or "four", then you get partial credit.
+          #  Vagrant stinks.
+          # puts " +++ i is #{i}, disk for #{index} name #{disk['name']}"
+          file_to_disk = getFileToDisk(disk)
+          size_in_mb = disk['size_in_mb']
+          # NOTE: conversion here "4096" gave 4293MB /dev/sdb, 4.0G ext2 file system
+          size_for_createhd = size_in_mb
+          
+          if (ARGV[0] == "up") && ! File.exist?(file_to_disk)
+            puts "+++ Creating disk #{file_to_disk} size #{size_in_mb}"
+            vb.customize ["createhd",
+                          "--filename", file_to_disk,
+                          "--size", size_for_createhd,
+                          "--format", "VMDK"]
+          end
+
+          # TODO: on "vagrant destroy", make the disk file stay around?
+          vb.customize ['storageattach', :id,
+                        '--storagectl', 'SATAController',
+                        '--port', 1,
+                        '--device', 0,
+                        '--type', 'hdd',
+                        '--medium', file_to_disk]          
+        end
       end
 
       node.vm.network :private_network, ip: node_ip
-      node.vm.hostname = node_fqdn
 
-      # three levels up is the bigtop "home" directory.
-      # the current directory has puppet recipes which we need for provisioning.
-#      bigtop.vm.synced_folder "./../apache-bigtop/", "/bigtop-home"
-
-      # We also add the bigtop-home output/ dir, so that locally built rpms will be available.
-#      puts "Adding output/ repo ? #{enable_local_repo}"
-
-      # carry on w/ installation
-#      node.vm.provision :shell do |shell|
-#        shell.path = "./../apache-bigtop/bigtop-deploy/vm/utils/setup-env-" + distro + ".sh"
-#        shell.args = ["#{enable_local_repo}"]
-#      end
       
-      node.vm.provision "shell", inline: $script
+      # sync folders:
+      folders = getSyncFolders(index)
+      folders.each do |folder|
+        node.vm.synced_folder folder['src'], folder['dest'], folder['options']
+      end
 
-      # Add the ip to FQDN and hostname mapping in /etc/hosts
-#      node.hostmanager.aliases = "#{bigtop_fqdn} #{bigtop_hostname}"
+      # /etc/hosts:
+      node.vm.provision "shell", inline: $script
 
 
     end
