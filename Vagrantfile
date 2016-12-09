@@ -42,36 +42,66 @@ keys.each do |outerk|
   end
 end
 
+# Purpose:
+#   return instances[index][key] if that exists, otherwise,
+#   return defaults[key] if that key exists, otherwise,
+#   return nil
 # i = 1 .. N      index = 0 .. N-1
 def getConfigValue(index, key)
-  config = CONFIG
-  retval = "ERROR for #{index} for #{key}"
-  if config.has_key?('defaults')
-    defaultReturn = config['defaults'][key]
-    retval = defaultReturn
-  else
-    puts "ERROR - missing 'defaults' section in configuration"
+  retval = nil
+  defaultsReturn = getDefaultsValue(key)
+  if ! defaultsReturn.nil?
+    retval = defaultsReturn
   end
-  if config.has_key?('instances')
-    item = config['instances'][index]
-    if item.has_key?(key)
-      retval = item[key]
-    end
+  instancesvalue = getInstanceValue(index, key)
+  if ! instancesvalue.nil?
+    retval = instancesvalue
   end
 
 #  puts "Return for instances[#{index}][#{key}] is #{retval}"
   return retval
 end
 
-CLUSTER_PREFIX = "cluster"
+# Return defaults[key] or Nil
+def getDefaultsValue(key)
+  config = CONFIG
+  retval = nil
+  if config.has_key?('defaults')
+    retval = config['defaults'][key]
+  else
+    puts "ERROR - missing 'defaults' section in configuration"
+  end
+  return retval
+end
+
+# Return instances[index][key] or Nil
+def getInstanceValue(index, key)
+  config = CONFIG
+  retval = nil
+  if config.has_key?('instances')
+    item = config['instances'][index]
+    if item.has_key?(key)
+      retval = item[key]
+    end
+  end
+#  puts "Returning #{index} #{key} of #{retval}"
+  return retval
+end
+
+
+# Use the CLUSTER_PREFIX to get around "only 1 node named node01" problem.
+CLUSTER_PREFIX = CONFIG['defaults']['cluster_prefix']
 
 # i = 1 .. N      index = 0 .. N-1
 def getHostName(i)
-  # if you have more than 99 nodes, then this is not the tool for you:
-  if i > 1
-    nodename = "#{CLUSTER_PREFIX}-node%02d" % (i - 1)
-  else
-    nodename = "#{CLUSTER_PREFIX}-master"
+  nodename = getInstanceValue(i - 1, 'hostname')
+  if nodename.nil?
+    # if you have more than 99 nodes, then this is not the tool for you:
+    if i > 1
+      nodename = "#{CLUSTER_PREFIX}-node%02d" % (i - 1)
+    else
+      nodename = "#{CLUSTER_PREFIX}-master"
+    end
   end
 #  puts "Return for getHostName(#{i}) is #{nodename}"
   return nodename
@@ -85,7 +115,7 @@ end
 # i = 1 .. N      index = 0 .. N-1
 def getSyncFolders(index)
   retval = getConfigValue(index, 'synced_folders')
-  if retval.nil? || retval =~ /ERROR/
+  if retval.nil?
     retval = []
   end
   return retval
@@ -94,7 +124,7 @@ end
 # i = 1 .. N      index = 0 .. N-1
 def getExtraDisks(index)
   retval = getConfigValue(index, 'extra_disks')
-  if retval.nil? || retval =~ /ERROR/
+  if retval.nil?
     retval = []
   end
   return retval
@@ -127,10 +157,11 @@ num_instances = CONFIG['instances'].length
 # Note: Vagrant writes this to /etc/hosts:
 #        127.0.1.1 cluster1.vagrant cluster1
 # Note: Remove any "127.0.?.1 cluster1.vagrant" entries, because we want the IP-FQDN
-#   to be one of the instances[:ip_address:] items, you could use sed:
+#   to be one of the instances[:ip_address:] items.
+# To leave the original /etc/hosts content, you could use sed:
 #     sed -i "/127.0.0.1 #{CLUSTER_PREFIX}/d" /etc/hosts
 #     sed -i "/127.0.1.1 #{CLUSTER_PREFIX}/d" /etc/hosts
-# But currently, this is done because the entire /etc/hosts file is replaced:
+# But currently this is not done because the entire /etc/hosts file is replaced:
 #
 etc_hosts_fixed = <<SCRIPT
 # fixed, by Vagrantfile
@@ -170,9 +201,9 @@ VAGRANTFILE_API_VERSION = "2"
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   #
   # Vagrant is totally messed up -
-  #  there is no accepted way to reliably "create the .vmdk if it does not exist" when
-  #    you are inside Vagrant.configure...
-  #  so - look at the "puts", and how many times it prints on a single "vagrant up"...
+  #  when  you are inside Vagrant.configure...
+  #    look at the "puts", and count how many times it prints the line
+  #         " i is 3 ..."
   #
   # NOTE: *** on 'vagrant destroy', extra disks are deleted ***
   
@@ -221,7 +252,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
                           "--format", "VMDK"]
           end
 
-          # TODO: on "vagrant destroy", make the disk file stay around?
+          # TODO: fix "vagrant destroy" will delete file_to_disk file
           vb.customize ['storageattach', :id,
                         '--storagectl', 'SATAController',
                         '--port', 1,

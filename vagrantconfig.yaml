@@ -17,22 +17,29 @@
 # instead of repeating these for each instance,
 #   use the "defaults" section instead, and override when needed
 #   in the instance section
+# note that instances get a default hostname that follows the pattern
+#   {cluster_prefix}-master, {cluster_prefix}-node01, {cluster_prefix}-node02,
+# and you can override this hostname in the "instances" section if you want.
 defaults:
+   cluster_prefix: cluster
    memory_size: 512
    number_cpus: 1
    vm_box: "ubuntu/trusty64"
+
 #
 # Notice that instances do not have a __default__ ip_address,
 #   so you must specify at least ip_address: in the array of instances
 instances:
   - ip_address: "10.212.10.100"
     memory_size: 513
+#    hostname: master
   - ip_address: "10.212.10.101"
+#    hostname: util
   - ip_address: "10.212.10.102"
+#    hostname: disk01
     extra_disks:
       - file_name: 'extradisk1'
         size_in_mb:  '4096'
-        name: testname
     synced_folders:
       - src: test
         dest: /tmp/test
@@ -43,3 +50,7 @@ instances:
           :owner:  root
           :group:  root
           :mount_options: ['dmode=0755', 'fmode=0644']
+#
+# Note about extra_disks:
+#  On 'vagrant destroy', the .vmdk file will be delete from disk.
+#
